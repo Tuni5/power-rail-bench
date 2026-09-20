@@ -1,0 +1,19 @@
+# power-rail-bench - runtime dependencies
+#
+# Python 3.9+ expected. No frameworks: instrument I/O, serial, numbers.
+# Lower bounds only for now; freeze exact versions (pip freeze) once the
+# full sequence has run against both instruments.
+
+pyvisa>=1.13          # SCPI transport layer
+pyvisa-py>=0.7.0      # pure-python VISA backend, no vendor driver needed
+pyserial>=3.5         # required by pyvisa-py for ASRL (Owon, Pico)
+numpy>=1.24           # waveform math in scope.py / sequence.py
+
+# --- optional, depending on how the scope is connected ---------------------
+# RTM2034 over LAN (TCPIP::...::INSTR): nothing extra needed.
+# RTM2034 over USB (USBTMC) with the pyvisa-py backend:
+#     pyusb>=1.2
+#     plus a udev rule on Linux, or a vendor VISA install on Windows.
+# Resource discovery of LAN instruments via list_resources():
+#     psutil>=5.9
+#     zeroconf>=0.100
