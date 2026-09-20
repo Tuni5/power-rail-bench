@@ -73,12 +73,39 @@ from the converter IC datasheets: MP1584EN up to 28 V, LM2596 up to 35 V.
 
 ## Results (claimed vs measured)
 
-Nothing measured yet. Filled in from the JSON record of each run; see
-`reports/` for the generated HTML.
+Sequence not run yet. Per-DUT notes with adjustment data and first
+side readings: `docs/dut_lm2596.md`, `docs/dut_mp1584.md`.
 
 | Parameter | Claimed | Measured (LM2596) | Measured (MP1584EN) | Verdict |
 |-----------|---------|-------------------|---------------------|---------|
-| - | - | - | - | - |
+| Efficiency 12 V -> 5 V, 1 A | 92 % (LM2596), none (MP1584) | ~77 % (75-80 %), side reading | ~81 % (79-84 %), side reading | LM2596: not met |
+| Load regulation 0 -> 1 A | no spec - characterized | -30 mV | -110 mV | characterized |
+
+## Method notes
+
+Things learned while bringing the bench up that shape how the measurements
+are taken. Each one cost a wrong number first.
+
+- Vertical scale is chosen per question, not per signal. The RTM2034 has an
+  8-bit ADC: at 1 V/div one step is 40 mV, so a +/-1 % band around 5 V is
+  one step wide and a recovery time read at that scale is noise. Ramps and
+  overshoot are read at a coarse scale; recovery into a +/-1 % band is read
+  at 100 mV/div or finer with the DC offset feature.
+- Absolute DC values do not come from the scope at coarse scales (+/-1.5 %
+  DC accuracy); they come from the supply readout or a DMM.
+- Single-shot on a slow timebase: after SINGle the scope first fills its
+  pre-trigger memory and ignores edges until then. The script waits for that
+  before it causes the event.
+- Edge triggers on a switching rail get the channel's 20 MHz limit and the
+  trigger noise-reject filter; without them the scope fired on spikes.
+- Every number computed from a waveform is cross-checked once against the
+  scope's own measurement on the same record. Levels for rise time are
+  base-to-top as the scope defines them; measuring from 0 V instead gave
+  8 ms too much when the supply's output capacitors still held 0.3 V.
+- The supply's turn-on ramp depends on what its output capacitors held
+  before: 33-34 ms 10-90 % from a discharged output, 28.5 ms starting at
+  0.3 V (2026-09-20). Turn-on measurements discharge the output through
+  the load switch first, so every run starts from the same state.
 
 ## Known limits
 
@@ -99,10 +126,13 @@ Nothing measured yet. Filled in from the JSON record of each run; see
   to within 2 % once settled, but needs more than 1 s to settle after a load
   change. Static readings are taken 2 s after the last change. An earlier
   1 R discrepancy was a crocodile clip, not the ammeter.
-- OWON output ramps in about 1 s after OUTPut ON (soft start, fixed time,
-  2 to 12 V). A DUT "turn-on" triggered over SCPI sees a ~1 s input ramp,
-  not a step. Its own measurement readout updates about 3 times per
-  second and is used for static values only.
+- OWON output reaches 5 V within about 100 ms of OUTPut ON (10-90 % in
+  roughly 45 ms, exponential tail; scope, manual measurement 2026-09-20).
+  A DUT "turn-on" triggered over SCPI therefore sees a ~50 ms input ramp,
+  not a step. The supply's own measurement readout lags the output by
+  about 1 s and updates about 3 times per second; it is used for static
+  values only. An earlier "1 s ramp" read from that readout was the lag,
+  not the output.
 - Anything that did not reproduce across runs is listed here rather than
   averaged away.
 
@@ -111,10 +141,13 @@ Nothing measured yet. Filled in from the JSON record of each run; see
 Work in progress - instrument bring-up.
 
 - [x] PSU (OWON SPE3102): serial link, `*IDN?`, setpoints, OVP/OCP, output with readback (2026-09-20)
-- [ ] Scope (R&S RTM2034): `*IDN?`, clean open/close
+- [x] Scope (R&S RTM2034): LAN socket, `*IDN?`, error queue, screenshot (2026-09-20)
 - [x] Load switch: Pico firmware, `LOAD ON` / `LOAD OFF` / `STEP`, verified at the module LED
       and with a 5.14 R load through the module (2026-09-20)
-- [ ] One measurement taken by hand, then reproduced by script and compared
+- [x] One measurement taken by hand, then reproduced by script and compared: supply
+      turn-on ramp, 10-90 % rise 33.2 ms (scope MEAS) vs 33.7 ms (numpy on the same
+      record); six script runs 28-37 ms, spread explained by residual output charge
+      (2026-09-20)
 - [ ] Source noise floor (measurement 0)
 - [ ] Full sequence (measurements 1-4)
 - [ ] HTML report and comparison page
@@ -138,9 +171,15 @@ python -m bench.psu --idn                        # find the supply, print *IDN?
 python -m bench.psu --status                     # setpoints, limits, output, readings
 python -m bench.psu --ovp 6 --ocp 1 --volt 5 --curr 0.5 --on
 python -m bench.psu --off
+
+python -m bench.load --idn                       # Pico load switch
+python -m bench.load --on / --off / --step 200
+
+python -m bench.scope --idn                      # RTM2034 over LAN
+python -m bench.scope --screenshot reports/screenshots/name.png
 ```
 
-Ports, USB identities and limits live in `bench/config.py`.
+Ports, addresses, USB identities and limits live in `bench/config.py`.
 
 ---
 

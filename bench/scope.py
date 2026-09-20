@@ -1,10 +1,15 @@
 """Rohde & Schwarz RTM2034 oscilloscope, SCPI over LAN (VXI-11 through pyvisa-py).
 
-This step: connection, *IDN?, instrument error queue, screenshot to PNG.
-Channel setup, trigger, single-shot and measurements follow once the manual
-measurement has been done by hand and the commands checked against the
-RTM2000 manual. Anything marked ASSUMPTION below has two known spellings in
-the R&S families and needs to be confirmed on this instrument.
+Verified 2026-09-20 on Rohde&Schwarz,RTM2034,5710.0999k34/101580,05.411:
+connection over the raw socket, *IDN?, error queue, screenshot to PNG.
+
+Also verified 2026-09-20: channel, timebase, edge trigger with noise
+reject, single-shot with pre-trigger wait, built-in measurements, ASCII
+waveform readout. command() checks the error queue after every set
+command, so a wrong spelling fails at its own line with the instrument's
+error text; that is how the spellings above were settled.
+
+Manual: R&S RTM2000 User Manual 1317.4726.02, chapter 16 "Remote Control".
 
 Standalone:
     python -m bench.scope --idn
@@ -38,8 +43,39 @@ TERMINATOR = "\n"
 CMD_IDN = "*IDN?"
 CMD_OPC = "*OPC?"                    # answers "1" when all previous commands are done
 CMD_ERROR = "SYSTem:ERRor?"          # pops one entry from the error queue, '0,"No error"' when empty
-CMD_SCREEN_FORMAT = "HCOPy:LANGuage PNG"   # ASSUMPTION: RTM2000 spelling; RTB2000 uses HCOPy:FORMat PNG
+CMD_SCREEN_FORMAT = "HCOPy:LANGuage PNG"   # verified; RTB2000 would want HCOPy:FORMat
 CMD_SCREEN_DATA = "HCOPy:DATA?"      # screenshot as an IEEE 488.2 definite-length block
+
+# channel <ch> = 1..4
+CMD_CH_STATE = "CHANnel{ch}:STATe {on}"
+CMD_CH_COUPLING = "CHANnel{ch}:COUPling {coupling}"   # ASSUMPTION: DCLimit = 1 MOhm DC, ACLimit = 1 MOhm AC
+CMD_CH_SCALE = "CHANnel{ch}:SCALe {volts_per_div}"
+CMD_CH_POSITION = "CHANnel{ch}:POSition {divisions}"  # ASSUMPTION: vertical position in divisions
+CMD_CH_BANDWIDTH = "CHANnel{ch}:BANDwidth {bw}"       # FULL | B20
+
+CMD_TB_SCALE = "TIMebase:SCALe {seconds_per_div}"
+CMD_TB_POSITION = "TIMebase:POSition {seconds}"
+
+CMD_TRIG_MODE = "TRIGger:A:MODE {mode}"               # AUTO | NORMal
+CMD_TRIG_TYPE = "TRIGger:A:TYPE EDGE"
+CMD_TRIG_SOURCE = "TRIGger:A:SOURce CH{ch}"
+CMD_TRIG_SLOPE = "TRIGger:A:EDGE:SLOPe {slope}"       # POSitive | NEGative
+CMD_TRIG_LEVEL = "TRIGger:A:LEVel{ch} {volts}"        # verified: level index = source channel
+CMD_TRIG_NREJECT = "TRIGger:A:EDGE:FILTer:NREJect {on}"   # verified; HFReject and FILTer:HF are rejected (-113)
+
+CMD_SINGLE = "SINGle"
+CMD_RUN = "RUN"
+CMD_STOP = "STOP"
+
+# automatic measurements, slot <m> = 1..6 on the RTM2000
+CMD_MEAS_ENABLE = "MEASurement{m}:ENABle {on}"
+CMD_MEAS_SOURCE = "MEASurement{m}:SOURce CH{ch}"
+CMD_MEAS_TYPE = "MEASurement{m}:MAIN {kind}"         # RTIMe FTIMe PEAK MEAN FREQuency ...
+CMD_MEAS_RESULT = "MEASurement{m}:RESult:ACTual?"   # verified 2026-09-20
+
+CMD_DATA_FORMAT = "FORMat:DATA ASCii"
+CMD_DATA_HEADER = "CHANnel{ch}:DATA:HEADer?"          # xstart, xstop, record length, values per interval
+CMD_DATA = "CHANnel{ch}:DATA?"
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +122,8 @@ def query(inst, cmd, retries=config.SCOPE_RETRIES):
             LOG.debug("tx [%d/%d] %r", n, attempts, cmd)
             inst.write(cmd)
             answer = inst.read().strip()
-            LOG.debug("rx %r (%.0f ms)", answer, (time.monotonic() - t0) * 1e3)
+            shown = answer if len(answer) <= 60 else f"{answer[:60]}... ({len(answer)} chars)"
+            LOG.debug("rx %r (%.0f ms)", shown, (time.monotonic() - t0) * 1e3)
             if answer:
                 return answer
             LOG.warning("empty answer to %r (attempt %d/%d)", cmd, n, attempts)
@@ -172,11 +209,124 @@ def screenshot(inst, path):
     if not data.startswith(b"\x89PNG"):
         raise ScopeError(f"screenshot is not a PNG ({len(data)} bytes, starts {data[:8]!r})")
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "wb") as f:
-        f.write(data)
+    try:
+        with open(path, "wb") as f:
+            f.write(data)
+    except OSError as exc:
+        # Windows refuses to overwrite a PNG that is open in a viewer. The
+        # capture is the valuable part; keep it under a fresh name instead.
+        root, ext = os.path.splitext(path)
+        path = f"{root}_{time.strftime('%H%M%S')}{ext}"
+        LOG.warning("could not write the requested file (%s); saving as %s", exc, path)
+        with open(path, "wb") as f:
+            f.write(data)
     LOG.info("screenshot %s (%d bytes)", path, len(data))
-    return len(data)
+    return path
 
+
+def setup_channel(inst, ch, volts_per_div, position_div=0.0,
+                  coupling="DCLimit", bandwidth="FULL"):
+    """Vertical setup of one channel. position_div moves the ground line:
+    -2.5 puts 0 V two and a half divisions below centre."""
+    command(inst, CMD_CH_STATE.format(ch=ch, on="ON"))
+    command(inst, CMD_CH_COUPLING.format(ch=ch, coupling=coupling))
+    command(inst, CMD_CH_BANDWIDTH.format(ch=ch, bw=bandwidth))
+    command(inst, CMD_CH_SCALE.format(ch=ch, volts_per_div=volts_per_div))
+    command(inst, CMD_CH_POSITION.format(ch=ch, divisions=position_div))
+    LOG.info("CH%d: %s V/div, pos %.1f div, %s, bw %s", ch, volts_per_div, position_div,
+             coupling, bandwidth)
+
+
+def setup_timebase(inst, seconds_per_div, position_s=0.0):
+    """Horizontal setup. position_s shifts the trigger point on screen."""
+    command(inst, CMD_TB_SCALE.format(seconds_per_div=seconds_per_div))
+    command(inst, CMD_TB_POSITION.format(seconds=position_s))
+    LOG.info("timebase %s s/div, pos %s s", seconds_per_div, position_s)
+
+
+def setup_trigger(inst, ch, volts, slope="POSitive", mode="NORMal", noise_reject=True):
+    """Edge trigger on one channel. NORMal: draw only when the edge occurs.
+
+    noise_reject filters the trigger path. Without it, switching spikes on
+    a 5 V rail cross a 2 V level in both directions and the scope fires on
+    a spike instead of the edge (2026-09-20, two runs, two different
+    trigger points on the same ramp). Combine with a 20 MHz channel limit.
+    """
+    command(inst, CMD_TRIG_MODE.format(mode=mode))
+    command(inst, CMD_TRIG_TYPE)
+    command(inst, CMD_TRIG_SOURCE.format(ch=ch))
+    command(inst, CMD_TRIG_SLOPE.format(slope=slope))
+    command(inst, CMD_TRIG_LEVEL.format(ch=ch, volts=volts))
+    command(inst, CMD_TRIG_NREJECT.format(on="ON" if noise_reject else "OFF"))
+    LOG.info("trigger CH%d %s at %.2f V, %s, noise reject %s", ch, slope, volts, mode,
+             "on" if noise_reject else "off")
+
+
+def arm_single(inst, seconds_per_div, reference=0.5):
+    """Arm one acquisition and wait until the scope is actually ready to trigger.
+
+    After SINGle the scope first fills its pre-trigger memory: with the
+    trigger at screen centre that is half the screen width. An edge that
+    arrives before the buffer is full is recorded but NOT treated as the
+    trigger; the scope then fires on the next crossing, which on a noisy
+    rail is a spike (2026-09-20: ramp at the left edge, trigger on a spike).
+    So this returns only after 10 * seconds_per_div * reference plus margin.
+    """
+    command(inst, CMD_SINGLE)
+    pretrigger = 10 * seconds_per_div * reference
+    time.sleep(pretrigger + config.SCOPE_ARM_MARGIN_S)
+    LOG.info("armed, pre-trigger buffer full after %.2f s, waiting for trigger", pretrigger)
+
+
+def wait_acquired(inst, timeout_s):
+    """Block until the armed acquisition has completed, or fail after timeout_s.
+
+    ASSUMPTION: *OPC? does not answer until the single acquisition is done.
+    That is the documented R&S pattern (SINGle;*OPC?).
+    """
+    t0 = time.monotonic()
+    wait_done(inst, timeout_ms=int(timeout_s * 1000))
+    LOG.info("acquired after %.0f ms", (time.monotonic() - t0) * 1e3)
+
+
+def measurement(inst, slot, ch, kind):
+    """Let the scope compute one of its built-in measurements on the current record.
+
+    kind: RTIMe (10-90 % rise), FTIMe, PEAK (Vpp), MEAN, FREQuency, ...
+    Returns the value as float. Used next to the numpy evaluation so the
+    two can be compared; a disagreement means one of them is wrong.
+    """
+    command(inst, CMD_MEAS_ENABLE.format(m=slot, on="ON"))
+    command(inst, CMD_MEAS_SOURCE.format(m=slot, ch=ch))
+    command(inst, CMD_MEAS_TYPE.format(m=slot, kind=kind))
+    wait_done(inst)                                  # let the measurement update
+    value = float(query(inst, CMD_MEAS_RESULT.format(m=slot)))
+    LOG.info("scope measurement %d: %s on CH%d = %g", slot, kind, ch, value)
+    return value
+
+
+def waveform(inst, ch):
+    """Read the displayed record of one channel. Returns (time_s, volts) as numpy arrays.
+
+    ASCII transfer: slow for long records but nothing to get wrong. Switch
+    to REAL,32 once the measurements need more than ~100k points.
+    """
+    import numpy as np
+    command(inst, CMD_DATA_FORMAT)
+    header = query(inst, CMD_DATA_HEADER.format(ch=ch)).split(",")
+    x_start, x_stop, points = float(header[0]), float(header[1]), int(header[2])
+    saved = inst.timeout
+    inst.timeout = config.SCOPE_WAVEFORM_TIMEOUT_MS
+    try:
+        raw = query(inst, CMD_DATA.format(ch=ch), retries=0)
+    finally:
+        inst.timeout = saved
+    volts = np.array(raw.split(","), dtype=float)
+    if len(volts) != points:
+        LOG.warning("header says %d points, got %d", points, len(volts))
+    t = np.linspace(x_start, x_stop, len(volts))
+    LOG.info("CH%d waveform: %d points, %.3g s to %.3g s", ch, len(volts), x_start, x_stop)
+    return t, volts
 
 
 # ---------------------------------------------------------------------------

@@ -267,8 +267,10 @@ def output(inst, on):
     """Switch the output on or off and confirm it happened.
 
     Switching on also waits until the measured voltage has reached the
-    setpoint: the supply says ON immediately, but ramps for about a second
-    (soft start) and its measurement lags behind the output.
+    setpoint. The output itself is up within ~100 ms (scope, 2026-09-20);
+    what takes about a second is the supply's own readout catching up.
+    Waiting for the readout is still right: it is the same value the
+    sequence records afterwards.
     """
     command(inst, CMD_OUTPUT_ON if on else CMD_OUTPUT_OFF)
     # The relay takes a moment. A query sent right away was lost once

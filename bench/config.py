@@ -42,10 +42,13 @@ LOAD_R_5 = 5.14                      # "5 R / 25 W", DMM 2026-09-20; supply sees
 LOAD_R_10 = 10.0                     # "10 R / 25 W", DMM value pending; supply saw 10.3 R
 
 # --- Scope: Rohde & Schwarz RTM2034, SCPI over LAN --------------------------
-SCOPE_RESOURCE = "TCPIP0::192.168.178.XX::inst0::INSTR"  # <- IP from the Fritz!Box; not verified yet
+SCOPE_RESOURCE = "TCPIP0::192.168.178.78::5025::SOCKET"  # raw SCPI socket; verified 2026-09-20
+                                        # IP via Fritz!Box DHCP, pinned there; MAC 40-d8-55-0e-98-5a
 SCOPE_TIMEOUT_MS = 5000                 # per query
-SCOPE_SCREENSHOT_TIMEOUT_MS = 15000     # PNG transfer over VXI-11 takes a moment
+SCOPE_SCREENSHOT_TIMEOUT_MS = 15000     # PNG transfer takes a moment
+SCOPE_WAVEFORM_TIMEOUT_MS = 30000       # ASCII waveform of a long record
 SCOPE_RETRIES = 1
+SCOPE_ARM_MARGIN_S = 0.2                # extra wait after the pre-trigger buffer is full
 
 # --- Load switch: Raspberry Pi Pico, MicroPython, USB-serial ----------------
 LOAD_PORT = None                     # "COM5" to pin it; None = probe by VID
