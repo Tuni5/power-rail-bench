@@ -40,6 +40,12 @@ class ScopeError(RuntimeError):
 
 TERMINATOR = "\n"
 
+TIMEOUT_MS = 5000               # per query
+SCREENSHOT_TIMEOUT_MS = 15000   # PNG transfer takes a moment
+WAVEFORM_TIMEOUT_MS = 30000     # ASCII waveform of a long record
+RETRIES = 1
+ARM_MARGIN_S = 0.2              # extra wait after the pre-trigger buffer is full
+
 CMD_IDN = "*IDN?"
 CMD_OPC = "*OPC?"                    # answers "1" when all previous commands are done
 CMD_ERROR = "SYSTem:ERRor?"          # pops one entry from the error queue, '0,"No error"' when empty
@@ -83,7 +89,7 @@ CMD_DATA = "CHANnel{ch}:DATA?"
 # ---------------------------------------------------------------------------
 
 @contextlib.contextmanager
-def open_scope(resource=config.SCOPE_RESOURCE, timeout_ms=config.SCOPE_TIMEOUT_MS):
+def open_scope(resource=config.SCOPE_RESOURCE, timeout_ms=TIMEOUT_MS):
     """Open the scope, hand out the pyvisa instrument, close it again no matter what.
 
     Nothing about the scope's state is changed on open or close. Whatever
@@ -113,7 +119,7 @@ def open_scope(resource=config.SCOPE_RESOURCE, timeout_ms=config.SCOPE_TIMEOUT_M
 # Transfers
 # ---------------------------------------------------------------------------
 
-def query(inst, cmd, retries=config.SCOPE_RETRIES):
+def query(inst, cmd, retries=RETRIES):
     """Send a command that expects a text answer, return it as a string."""
     attempts = retries + 1
     for n in range(1, attempts + 1):
@@ -199,7 +205,7 @@ def screenshot(inst, path):
     command(inst, CMD_SCREEN_FORMAT)
     LOG.debug("tx %r", CMD_SCREEN_DATA)
     saved = inst.timeout
-    inst.timeout = config.SCOPE_SCREENSHOT_TIMEOUT_MS
+    inst.timeout = SCREENSHOT_TIMEOUT_MS
     try:
         data = inst.query_binary_values(CMD_SCREEN_DATA, datatype="B", container=bytes)
     except pyvisa.VisaIOError as exc:
@@ -238,7 +244,13 @@ def setup_channel(inst, ch, volts_per_div, position_div=0.0,
 
 
 def setup_timebase(inst, seconds_per_div, position_s=0.0):
-    """Horizontal setup. position_s shifts the trigger point on screen."""
+    """Horizontal setup. position_s shifts the trigger point on screen.
+
+    Sign, verified 2026-09-20: positive moves the trigger LEFT (more record
+    after the trigger). +0.06 s at 20 ms/div gave a record from -0.04 s to
+    +0.16 s. Use it whenever the interesting part follows the trigger, e.g.
+    a ramp that needs its settled top inside the record.
+    """
     command(inst, CMD_TB_SCALE.format(seconds_per_div=seconds_per_div))
     command(inst, CMD_TB_POSITION.format(seconds=position_s))
     LOG.info("timebase %s s/div, pos %s s", seconds_per_div, position_s)
@@ -274,7 +286,7 @@ def arm_single(inst, seconds_per_div, reference=0.5):
     """
     command(inst, CMD_SINGLE)
     pretrigger = 10 * seconds_per_div * reference
-    time.sleep(pretrigger + config.SCOPE_ARM_MARGIN_S)
+    time.sleep(pretrigger + ARM_MARGIN_S)
     LOG.info("armed, pre-trigger buffer full after %.2f s, waiting for trigger", pretrigger)
 
 
@@ -316,7 +328,7 @@ def waveform(inst, ch):
     header = query(inst, CMD_DATA_HEADER.format(ch=ch)).split(",")
     x_start, x_stop, points = float(header[0]), float(header[1]), int(header[2])
     saved = inst.timeout
-    inst.timeout = config.SCOPE_WAVEFORM_TIMEOUT_MS
+    inst.timeout = WAVEFORM_TIMEOUT_MS
     try:
         raw = query(inst, CMD_DATA.format(ch=ch), retries=0)
     finally:

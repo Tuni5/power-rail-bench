@@ -102,6 +102,10 @@ are taken. Each one cost a wrong number first.
   scope's own measurement on the same record. Levels for rise time are
   base-to-top as the scope defines them; measuring from 0 V instead gave
   8 ms too much when the supply's output capacitors still held 0.3 V.
+- Rise and settling times need the settled top inside the record. With
+  the trigger centred and 100 ms of tail, scope and numpy disagreed by
+  10 ms on the same ramp; with the trigger moved left and 160 ms of tail
+  they agree within 2 ms. The trigger position is set per measurement.
 - The supply's turn-on ramp depends on what its output capacitors held
   before: 33-34 ms 10-90 % from a discharged output, 28.5 ms starting at
   0.3 V (2026-09-20). Turn-on measurements discharge the output through

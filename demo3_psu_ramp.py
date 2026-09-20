@@ -22,7 +22,12 @@ from bench.common import setup_logging
 VOLTS = 5.0
 CURR_LIMIT = 0.5
 CH = 1
-TB = 0.02           # s/div: 200 ms on screen, ramp is ~100 ms
+TB = 0.02           # s/div: 200 ms on screen
+TRIG_POS_S = 0.06   # positive moves the trigger LEFT on the RTM (verified 2026-09-20: -0.06
+                    # gave a record from -0.16 s to +0.04 s). Trigger 40 ms from the left edge,
+                    # 160 ms of tail after it, so the plateau is settled inside the record.
+                    # With the trigger centred, the scope's own RTIMe and numpy disagreed by
+                    # 10 ms because neither saw a flat top.
 SCREENSHOT = "reports/screenshots/psu_ramp_script.png"
 
 
@@ -57,8 +62,12 @@ def rise_and_settle(t, v):
     i90 = np.argmax(v > v_base + 0.9 * swing)
     band = max(0.01 * v_final, 2 * lsb)
     outside = np.where(np.abs(v - v_final) > band)[0]
-    i_settle = outside[-1] + 1 if len(outside) else i10
-    return v_final, t[i90] - t[i10], t[i_settle] - t[i10], band, lsb
+    if len(outside) and outside[-1] == len(v) - 1:
+        t_settle = None                          # still outside the band at the record's end
+    else:
+        i_settle = outside[-1] + 1 if len(outside) else i10
+        t_settle = t[i_settle] - t[i10]
+    return v_final, t[i90] - t[i10], t_settle, band, lsb
 
 
 def main():
@@ -74,9 +83,9 @@ def main():
             psu.set_current(supply, CURR_LIMIT)
 
             scope.setup_channel(rtm, CH, volts_per_div=1.0, position_div=-2.5, bandwidth="B20")
-            scope.setup_timebase(rtm, seconds_per_div=TB)
+            scope.setup_timebase(rtm, seconds_per_div=TB, position_s=TRIG_POS_S)
             scope.setup_trigger(rtm, CH, volts=2.0)
-            scope.arm_single(rtm, TB)           # returns once the scope can trigger
+            scope.arm_single(rtm, TB, reference=0.2)   # pre-trigger part is now ~20 %
 
             try:
                 psu.output(supply, True)
@@ -91,8 +100,11 @@ def main():
         print(f"plateau     {v_final:.3f} V   (scope, 8 bit at 1 V/div: +/-1.5 % DC accuracy)")
         print(f"base        {v[:len(v) // 10].mean():.3f} V   (residual charge before turn-on)")
         print(f"rise 10-90  {t_rise * 1e3:.1f} ms  (numpy)   {scope_rise * 1e3:.1f} ms  (scope MEAS)")
-        print(f"settle      {t_settle * 1e3:.1f} ms  to +/-{band * 1e3:.0f} mV "
-              f"(ADC step {lsb * 1e3:.0f} mV; use a finer V/div with offset for a real 1 % band)")
+        if t_settle is None:
+            print(f"settle      not within +/-{band * 1e3:.0f} mV by the end of the record")
+        else:
+            print(f"settle      {t_settle * 1e3:.1f} ms  to +/-{band * 1e3:.0f} mV "
+                  f"(ADC step {lsb * 1e3:.0f} mV; use a finer V/div with offset for a real 1 % band)")
         return 0
 
     except (psu.PsuError, scope.ScopeError, ValueError) as exc:

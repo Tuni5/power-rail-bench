@@ -6,9 +6,13 @@ protocol lives in the module for that instrument.
 
 import logging
 import re
+import tomllib
+from pathlib import Path
 
 import pyvisa
 from serial.tools import list_ports
+
+DUTS_FILE = Path(__file__).resolve().parent / "duts.toml"   # next to config.py
 
 LOG = logging.getLogger("bench")
 
@@ -94,3 +98,18 @@ def find_port(probe_vids, ask_identity, expected_prefix, what):
             return p.device
         LOG.info("%s answered %r, not the %s", p.device, identity, what)
     raise LookupError(f"no {expected_prefix} found on any serial port")
+
+
+def dut(dut_id):
+    """One device-under-test block from duts.toml, by its table name.
+
+    Raises KeyError with the available ids if the name is unknown, so a typo
+    on the command line fails before any instrument is touched.
+    """
+    with open(DUTS_FILE, "rb") as f:
+        table = tomllib.load(f)
+    if dut_id not in table:
+        raise KeyError(f"unknown DUT {dut_id!r}; duts.toml has: {', '.join(table)}")
+    entry = dict(table[dut_id])
+    entry["id"] = dut_id
+    return entry

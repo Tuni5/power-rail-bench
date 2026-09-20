@@ -35,7 +35,13 @@ class LoadError(RuntimeError):
     """Anything that stops us from controlling the load. The message says why."""
 
 
+IDN_PREFIX = "BENCH,LOAD-SWITCH"   # what IDN must start with (firmware/main.py)
 TERMINATOR = "\n"
+
+TIMEOUT_MS = 2000               # per query
+PROBE_TIMEOUT_MS = 1000         # per port while searching
+RETRIES = 1                     # extra attempts per query
+OPEN_SETTLE_S = 0.3             # after opening the CDC port; not tested whether needed
 
 CMD_IDN = "IDN"
 CMD_ON = "LOAD ON"
@@ -49,7 +55,7 @@ CMD_STEP = "STEP {:d}"
 # ---------------------------------------------------------------------------
 
 @contextlib.contextmanager
-def open_load(port, timeout_ms=config.LOAD_TIMEOUT_MS):
+def open_load(port, timeout_ms=TIMEOUT_MS):
     """Open the Pico, hand out the pyvisa instrument, close it again no matter what.
 
     Closing does not switch the load. The firmware keeps its state until
@@ -68,11 +74,10 @@ def open_load(port, timeout_ms=config.LOAD_TIMEOUT_MS):
             inst = visa().open_resource(name)
         except pyvisa.VisaIOError as exc:
             raise LoadError(f"cannot open {name}: {exc}")
-        inst.baud_rate = config.LOAD_BAUD       # USB CDC ignores it; set for completeness
         inst.write_termination = TERMINATOR
         inst.read_termination = TERMINATOR
         inst.timeout = timeout_ms
-        time.sleep(config.LOAD_OPEN_SETTLE_S)
+        time.sleep(OPEN_SETTLE_S)
         yield inst
     finally:
         if inst is not None:
@@ -86,10 +91,10 @@ def open_load(port, timeout_ms=config.LOAD_TIMEOUT_MS):
 def find_load():
     """Which port has the Pico? Ask every port with the Raspberry Pi vendor ID."""
     def ask(port):
-        with open_load(port, timeout_ms=config.LOAD_PROBE_TIMEOUT_MS) as inst:
+        with open_load(port, timeout_ms=PROBE_TIMEOUT_MS) as inst:
             return query(inst, CMD_IDN, retries=0)
     try:
-        return find_port(config.LOAD_PROBE_VIDS, ask, config.LOAD_IDN_PREFIX, "load switch")
+        return find_port(config.LOAD_PROBE_VIDS, ask, IDN_PREFIX, "load switch")
     except LookupError as exc:
         raise LoadError(str(exc))
 
@@ -100,7 +105,7 @@ def resolve_port(port):
         return port
     if config.LOAD_PORT:
         return config.LOAD_PORT
-    LOG.info("no port configured, probing for %s", config.LOAD_IDN_PREFIX)
+    LOG.info("no port configured, probing for %s", IDN_PREFIX)
     return find_load()
 
 
@@ -108,7 +113,7 @@ def resolve_port(port):
 # Transfer. The firmware answers every command, so one function is enough.
 # ---------------------------------------------------------------------------
 
-def query(inst, cmd, retries=config.LOAD_RETRIES):
+def query(inst, cmd, retries=RETRIES):
     """Send one line, read one line. ERR from the firmware and timeouts both raise."""
     attempts = retries + 1
     for n in range(1, attempts + 1):
@@ -172,7 +177,7 @@ def step(inst, ms):
     if ms < 1:
         raise LoadError("step length must be at least 1 ms")
     normal_timeout = inst.timeout
-    inst.timeout = ms + config.LOAD_TIMEOUT_MS
+    inst.timeout = ms + TIMEOUT_MS
     try:
         answer = query(inst, CMD_STEP.format(ms), retries=0)   # a retry would step twice
     finally:

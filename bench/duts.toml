@@ -1,0 +1,27 @@
+# Devices under test. Data, not code: the sequence reads the block named on
+# the command line, the report reads the same block for the "claimed" column.
+# Prose and findings per DUT live in docs/dut_<id>.md and point back here.
+
+[lm2596]
+name         = "LM2596 module"
+ic_datasheet = "TI LM2596"
+vin_max_v    = 35.0         # IC datasheet recommended maximum
+vout_set_v   = 4.98         # DMM at output cap, 12 V in, 1 A load, 2026-09-20
+
+[lm2596.claims]             # marketplace listing; no conditions stated
+source         = "marketplace listing"
+ripple_mvpp    = 30
+current_max_a  = 3.0
+efficiency_pct = 92
+
+[mp1584]
+name         = "MP1584EN module"
+ic_datasheet = "MPS MP1584"
+vin_max_v    = 28.0         # IC datasheet absolute maximum; bench stops at 24 V
+vout_set_v   = 4.88         # DMM at output cap, 12 V in, 1 A load, 2026-09-20
+
+[mp1584.claims]             # marketplace listing; no conditions stated
+source        = "marketplace listing"
+ripple_mvpp   = 30
+current_max_a = 3.0
+fsw_mhz       = 1.5

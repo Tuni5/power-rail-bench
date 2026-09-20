@@ -1,7 +1,9 @@
 # DUT: MP1584EN buck module
 
 One specimen. Everything below was measured on this bench unless marked
-as a claim. Dates are the day of measurement.
+as a claim. Dates are the day of measurement. The numbers the sequence
+uses (set voltage, input limit, claims) are in `duts.toml`; this file is
+the prose around them.
 
 ## Identity
 

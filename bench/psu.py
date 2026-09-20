@@ -39,11 +39,11 @@ class PsuError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# Protocol. Verified on OWON,SPE3102,25330431,FV:V5.2.0 (2026-09-20).
+# Instrument. Verified on OWON,SPE3102,25330431,FV:V5.2.0 (2026-09-20).
 # ---------------------------------------------------------------------------
 
-# serial framing; baud rate comes from config because it is an instrument
-# menu setting, not a protocol constant
+# serial framing; baud rate, model identity and rating come from config,
+# because they belong to the unit on this bench, not to the SPE family
 DATA_BITS = 8
 PARITY = Parity.none
 STOP_BITS = StopBits.one
@@ -65,13 +65,29 @@ CMD_GET_OUTPUT = "OUTPut?"          # answers ON or OFF
 CMD_MEAS_VOLT = "MEASure:VOLTage?"
 CMD_MEAS_CURR = "MEASure:CURRent?"
 
+# --- timing and tolerances, all from observing this instrument ---------------
+TIMEOUT_MS = 3000               # per query
+PROBE_TIMEOUT_MS = 1000         # per port while searching
+RETRIES = 2                     # extra attempts per query
+OPEN_SETTLE_S = 0.3             # after opening the port; not tested whether needed
+SET_REPLY_WINDOW_MS = 50        # how long to listen for "ERR" after a set command
+OUTPUT_SETTLE_S = 0.2           # after OUTPut ON/OFF; a query right after was lost once
+READBACK_TOL_V = 0.002          # setpoint resolution is 1 mV / 1 mA
+READBACK_TOL_A = 0.002
+ON_TIMEOUT_S = 2.0              # output must reach the setpoint within this
+ON_TOL_REL = 0.01               # ... to within 1 % ...
+ON_TOL_ABS_V = 0.05             # ... or 50 mV, whichever is larger
+ON_POLL_S = 0.2                 # MEASure:VOLTage? poll interval
+ON_STABLE_READS = 2             # target must hold for this many polls in a row
+MEAS_SETTLE_S = 2.0             # after a load change; the current readout is slow
+
 
 # ---------------------------------------------------------------------------
 # Connection
 # ---------------------------------------------------------------------------
 
 @contextlib.contextmanager
-def open_psu(port, timeout_ms=config.PSU_TIMEOUT_MS):
+def open_psu(port, timeout_ms=TIMEOUT_MS):
     """Open the supply, hand out the pyvisa instrument, close it again no matter what.
 
         with open_psu("COM7") as inst:
@@ -102,7 +118,7 @@ def open_psu(port, timeout_ms=config.PSU_TIMEOUT_MS):
         inst.write_termination = TERMINATOR
         inst.read_termination = TERMINATOR
         inst.timeout = timeout_ms
-        time.sleep(config.PSU_OPEN_SETTLE_S)
+        time.sleep(OPEN_SETTLE_S)
         yield inst
     finally:
         if inst is not None:
@@ -116,7 +132,7 @@ def open_psu(port, timeout_ms=config.PSU_TIMEOUT_MS):
 def find_psu():
     """Which port has the supply? Ask every port with the CH340 vendor ID."""
     def ask(port):
-        with open_psu(port, timeout_ms=config.PSU_PROBE_TIMEOUT_MS) as inst:
+        with open_psu(port, timeout_ms=PROBE_TIMEOUT_MS) as inst:
             return query(inst, CMD_IDN, retries=0)
     try:
         return find_port(config.PSU_PROBE_VIDS, ask, config.PSU_IDN_PREFIX, "supply")
@@ -138,7 +154,7 @@ def resolve_port(port):
 # Transfers. Everything goes through these two.
 # ---------------------------------------------------------------------------
 
-def query(inst, cmd, retries=config.PSU_RETRIES):
+def query(inst, cmd, retries=RETRIES):
     """Send a command that expects an answer, return the answer as a string.
 
     Retries on timeout. Never hangs, never invents a value: after the last
@@ -178,7 +194,7 @@ def command(inst, cmd):
         raise PsuError(f"write {cmd!r} failed: {exc}")
 
     normal_timeout = inst.timeout
-    inst.timeout = config.PSU_SET_REPLY_WINDOW_MS
+    inst.timeout = SET_REPLY_WINDOW_MS
     try:
         reply = inst.read().strip()
     except pyvisa.VisaIOError:
@@ -211,7 +227,7 @@ def set_voltage(inst, volts):
         raise PsuError(f"voltage {volts} V outside 0..{config.PSU_MAX_VOLT} V")
     command(inst, CMD_SET_VOLT.format(volts))
     back = float(query(inst, CMD_GET_VOLT))
-    if abs(back - volts) > config.PSU_READBACK_TOL_V:
+    if abs(back - volts) > READBACK_TOL_V:
         raise PsuError(f"voltage readback {back} V, asked for {volts} V")
     LOG.info("voltage setpoint %.3f V", back)
     return back
@@ -223,7 +239,7 @@ def set_current(inst, amps):
         raise PsuError(f"current {amps} A outside 0..{config.PSU_MAX_CURR} A")
     command(inst, CMD_SET_CURR.format(amps))
     back = float(query(inst, CMD_GET_CURR))
-    if abs(back - amps) > config.PSU_READBACK_TOL_A:
+    if abs(back - amps) > READBACK_TOL_A:
         raise PsuError(f"current readback {back} A, asked for {amps} A")
     LOG.info("current limit %.3f A", back)
     return back
@@ -235,7 +251,7 @@ def set_ovp(inst, volts):
         raise PsuError(f"OVP {volts} V outside 0..{config.PSU_MAX_VOLT} V")
     command(inst, CMD_SET_OVP.format(volts))
     back = float(query(inst, CMD_GET_OVP))
-    if abs(back - volts) > config.PSU_READBACK_TOL_V:
+    if abs(back - volts) > READBACK_TOL_V:
         raise PsuError(f"OVP readback {back} V, asked for {volts} V")
     LOG.info("OVP %.3f V", back)
     return back
@@ -247,7 +263,7 @@ def set_ocp(inst, amps):
         raise PsuError(f"OCP {amps} A outside 0..{config.PSU_MAX_CURR} A")
     command(inst, CMD_SET_OCP.format(amps))
     back = float(query(inst, CMD_GET_OCP))
-    if abs(back - amps) > config.PSU_READBACK_TOL_A:
+    if abs(back - amps) > READBACK_TOL_A:
         raise PsuError(f"OCP readback {back} A, asked for {amps} A")
     LOG.info("OCP %.3f A", back)
     return back
@@ -275,7 +291,7 @@ def output(inst, on):
     command(inst, CMD_OUTPUT_ON if on else CMD_OUTPUT_OFF)
     # The relay takes a moment. A query sent right away was lost once
     # (2026-09-20); the pause avoids relying on the retry for that.
-    time.sleep(config.PSU_OUTPUT_SETTLE_S)
+    time.sleep(OUTPUT_SETTLE_S)
     if output_is_on(inst) != on:
         raise PsuError(f"output did not switch {'ON' if on else 'OFF'}")
     LOG.info("output %s", "ON" if on else "OFF")
@@ -283,7 +299,7 @@ def output(inst, on):
         wait_for_voltage(inst, float(query(inst, CMD_GET_VOLT)))
 
 
-def wait_for_voltage(inst, target, timeout_s=config.PSU_ON_TIMEOUT_S):
+def wait_for_voltage(inst, target, timeout_s=ON_TIMEOUT_S):
     """Poll the measured voltage until it sits at target. Returns seconds taken.
 
     "Sits at" means: within tolerance on PSU_ON_STABLE_READS consecutive polls.
@@ -294,20 +310,20 @@ def wait_for_voltage(inst, target, timeout_s=config.PSU_ON_TIMEOUT_S):
     two things, both worth a FAIL: the ramp is unusually slow, or the supply
     is in current limit because the DUT draws more than allowed.
     """
-    tol = max(config.PSU_ON_TOL_ABS_V, config.PSU_ON_TOL_REL * target)
+    tol = max(ON_TOL_ABS_V, ON_TOL_REL * target)
     t0 = time.monotonic()
     good_reads = 0
     while True:
         measured = float(query(inst, CMD_MEAS_VOLT))
         elapsed = time.monotonic() - t0
         good_reads = good_reads + 1 if abs(measured - target) <= tol else 0
-        if good_reads >= config.PSU_ON_STABLE_READS:
+        if good_reads >= ON_STABLE_READS:
             LOG.info("output at %.3f V after %.0f ms", measured, elapsed * 1e3)
             return elapsed
         if elapsed >= timeout_s:
             raise PsuError(f"output at {measured} V after {elapsed*1e3:.0f} ms, "
                            f"target {target} V (still ramping or in current limit)")
-        time.sleep(config.PSU_ON_POLL_S)
+        time.sleep(ON_POLL_S)
 
 
 def verify_voltage(inst):
@@ -319,7 +335,7 @@ def verify_voltage(inst):
     """
     target = float(query(inst, CMD_GET_VOLT))
     measured = float(query(inst, CMD_MEAS_VOLT))
-    tol = max(config.PSU_ON_TOL_ABS_V, config.PSU_ON_TOL_REL * target)
+    tol = max(ON_TOL_ABS_V, ON_TOL_REL * target)
     if abs(measured - target) > tol:
         raise PsuError(f"output at {measured:.3f} V, setpoint {target:.3f} V "
                        f"(supply in current limit or load fault)")
